@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 
-const locations = ["Siwa", "Cairo", "Alexandria", "Luxor", "Aswan"];
+const locations = ["Siwa", "Cairo", "Alexandria", "Luxor", "Aswan","Dubai"];
 
 const getRandomDate = (start: Date, end: Date) => {
     return new Date(
@@ -11,7 +11,13 @@ const getRandomDate = (start: Date, end: Date) => {
     ).toISOString().split("T")[0]; // YYYY-MM-DD
 };
 
-const SearchBar = () => {
+interface SearchBarProps {
+    onSearchResults?: (results: any[]) => void;
+    onSearchStart?: () => void;
+    onSearchError?: (error: string) => void;
+}
+
+const SearchBar: React.FC<SearchBarProps> = ({ onSearchResults, onSearchStart, onSearchError }) => {
     const router = useRouter();
     const [from, setFrom] = useState<string>(locations[0]);
     const [to, setTo] = useState<string>(locations[1]);
@@ -22,10 +28,55 @@ const SearchBar = () => {
         getRandomDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 31), new Date(Date.now() + 1000 * 60 * 60 * 24 * 60))
     );
 
-    const handleSearch = () => {
-        // You can replace this with real navigation or API call
-        console.log({ from, to, startDate, endDate });
-        // router.push(`/trips?from=${from}&to=${to}&start=${startDate}&end=${endDate}`);
+    const handleSearch = async () => {
+        // Notify parent that search is starting
+        if (onSearchStart) {
+            onSearchStart();
+        }
+        
+        try {
+            // Convert dates to the required format for the API
+            const departureFrom = `${startDate}T00:00:00.000Z`;
+            const departureTo = `${endDate}T23:59:59.000Z`;
+            // For arrival, using similar logic but offset by a day or two
+            const arrivalFromDate = new Date(startDate);
+            arrivalFromDate.setDate(arrivalFromDate.getDate() + 1);
+            const arrivalToDate = new Date(endDate);
+            arrivalToDate.setDate(arrivalToDate.getDate() + 3);
+            
+            const arrivalFrom = arrivalFromDate.toISOString().replace('.000Z', 'Z');
+            const arrivalTo = arrivalToDate.toISOString().replace('.000Z', 'Z');
+
+            const params = new URLSearchParams({
+                from,
+                to,
+                departureFrom,
+                departureTo,
+                arrivalFrom,
+                arrivalTo,
+                offset: '0'
+            });
+
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://gaber-airplans.onrender.com/api/v1';
+            const response = await fetch(`${apiUrl}/trips?${params.toString()}`);
+            
+            if (!response.ok) {
+                throw new Error('Failed to fetch trips');
+            }
+
+            const data = await response.json();
+            console.log('Search results:', data);
+            
+            // Pass results to parent component
+            if (onSearchResults) {
+                onSearchResults(data.trips || data || []);
+            }
+        } catch (error) {
+            console.error('Search error:', error);
+            if (onSearchError) {
+                onSearchError(error instanceof Error ? error.message : 'Failed to search trips');
+            }
+        }
     };
 
     return (

@@ -11,6 +11,7 @@ interface TripCardProps {
     flightNumber: string;
     price: string;
     image?: string;
+    tripData?: any;
 }
 
 const TripCard: React.FC<TripCardProps> = ({
@@ -21,6 +22,7 @@ const TripCard: React.FC<TripCardProps> = ({
     flightNumber,
     price,
     image = "/siwa.jpg",
+    tripData,
 }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -72,6 +74,7 @@ const TripCard: React.FC<TripCardProps> = ({
                 to={to}
                 price={price}
                 availableSeats={availableSeats}
+                tripData={tripData}
             />
         </div>
     );
