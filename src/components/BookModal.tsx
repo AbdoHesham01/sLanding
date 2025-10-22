@@ -387,6 +387,37 @@ const BookModal: React.FC<BookModalProps> = ({
     setPassengers(newPassengers);
   }, [numberOfAdults]);
 
+  // Handle seat selection when number of adults changes
+  useEffect(() => {
+    // Only run this effect when numberOfAdults changes, not when selectedSeats changes
+    // to avoid infinite loops
+    const currentSeatsCount = selectedSeats.length;
+
+    // If we have more seats selected than adults, remove excess seats
+    if (currentSeatsCount > numberOfAdults) {
+      const newSelectedSeats = selectedSeats.slice(0, numberOfAdults);
+      setSelectedSeats(newSelectedSeats);
+      toast.success(
+        `Adjusted seat selection to match ${numberOfAdults} adult(s)`,
+        {
+          duration: 3000,
+        }
+      );
+    }
+    // If we have fewer seats than adults and some seats are already selected,
+    // clear all selections to let user reselect properly
+    else if (currentSeatsCount > 0 && currentSeatsCount < numberOfAdults) {
+      setSelectedSeats([]);
+      toast(
+        `Please select ${numberOfAdults} seat(s) for your updated booking`,
+        {
+          duration: 3000,
+          icon: "ℹ️",
+        }
+      );
+    }
+  }, [numberOfAdults]);
+
   // Calculate total amount
   useEffect(() => {
     const basePrice = tripData?.basePrice || 200;
