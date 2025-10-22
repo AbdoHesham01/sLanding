@@ -25,7 +25,7 @@ const SignUpSection: React.FC = () => {
 
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://gaber-airplans.onrender.com/api/v1';
-            const response = await fetch(`${apiUrl}/auth/register`, {
+            const response = await fetch(`${apiUrl}/auth/register?role=USER`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

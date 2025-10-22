@@ -44,30 +44,155 @@ const BookModal: React.FC<BookModalProps> = ({
     const [passengers, setPassengers] = useState<Passenger[]>([]);
     const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
     const [totalAmount, setTotalAmount] = useState(0);
-    const [paidAmount, setPaidAmount] = useState(0);
     const [isLoading, setIsLoading] = useState(false);
+    const [seats, setSeats] = useState<any[]>([]);
+    const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
+    const [showPayment, setShowPayment] = useState(false);
+    const [bookingConfirmed, setBookingConfirmed] = useState(false);
+    const [bookingDetails, setBookingDetails] = useState<any>(null);
+    const [currentBookingId, setCurrentBookingId] = useState<string | null>(null);
+    
+    // Reset all states when modal is closed
+    const resetModalStates = () => {
+        setPaymentUrl(null);
+        setShowPayment(false);
+        setBookingConfirmed(false);
+        setCurrentBookingId(null);
+        setBookingDetails(null);
+    };
+    
+    // Enhanced onClose to reset states and cancel booking if needed
+    const handleModalClose = async () => {
+        // If user closes modal while on payment screen, cancel the booking
+        if (showPayment && currentBookingId) {
+            try {
+                const token = localStorage.getItem('authToken');
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://siwayanlandapi.runasp.net/api';
 
-    // Mock seats data (44 seats)
-    const generateSeats = () => {
-        const seats = [];
-        const rows = 11; // 44 seats = 11 rows × 4 seats
-        const seatsPerRow = 4;
-        const seatLetters = ['A', 'B', 'C', 'D'];
-        
-        for (let row = 1; row <= rows; row++) {
-            for (let seatIndex = 0; seatIndex < seatsPerRow; seatIndex++) {
-                seats.push({
-                    id: `seat-${row}${seatLetters[seatIndex]}`,
-                    seatNumber: `${row}${seatLetters[seatIndex]}`,
-                    isAvailable: Math.random() > 0.3, // 70% available
-                    isSelected: false
+                await fetch(`${apiUrl}/bookings/${currentBookingId}/cancel`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    }
                 });
+                
+                console.log('Booking cancelled due to modal close');
+            } catch (error) {
+                console.error('Error cancelling booking on modal close:', error);
             }
         }
-        return seats;
+        
+        resetModalStates();
+        onClose();
+    };
+    
+    // Handle payment completion
+    const handlePaymentComplete = () => {
+        setShowPayment(false);
+        setPaymentUrl(null);
+        setCurrentBookingId(null); // Clear booking ID after successful payment
+        setBookingConfirmed(true);
+        // Store booking details for confirmation screen
+        setBookingDetails({
+            from,
+            to,
+            price,
+            selectedSeats,
+            passengers: passengers.filter(p => p.name.trim() !== ''),
+            bookerName,
+            bookerEmail
+        });
     };
 
-    const [seats, setSeats] = useState(generateSeats());
+    // Handle booking cancellation when going back from payment
+    const handleCancelBooking = async () => {
+        if (!currentBookingId) {
+            // If no booking ID, just go back to booking form
+            setShowPayment(false);
+            setPaymentUrl(null);
+            return;
+        }
+
+        // Confirm cancellation with user
+        const confirmCancel = window.confirm(
+            'Going back will cancel your current booking. Are you sure you want to continue?'
+        );
+        
+        if (!confirmCancel) {
+            return;
+        }
+
+        try {
+            setIsLoading(true);
+            const token = localStorage.getItem('authToken');
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://siwayanlandapi.runasp.net/api';
+
+            const response = await fetch(`${apiUrl}/bookings/${currentBookingId}/cancel`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (!response.ok) {
+                console.error('Failed to cancel booking');
+                // Even if cancellation fails, allow user to go back
+            } else {
+                console.log('Booking cancelled successfully');
+            }
+            
+            // Reset states
+            setShowPayment(false);
+            setPaymentUrl(null);
+            setCurrentBookingId(null);
+            
+        } catch (error) {
+            console.error('Error cancelling booking:', error);
+            // Even if there's an error, allow user to go back
+            setShowPayment(false);
+            setPaymentUrl(null);
+            setCurrentBookingId(null);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Initialize seats on component mount and when tripData changes
+    useEffect(() => {
+        // Generate seats from trip data or mock data
+        let newSeats;
+        
+        // If we have real seat data from the API, use it
+        if (tripData?.seatMap && Array.isArray(tripData.seatMap)) {
+            newSeats = tripData.seatMap.map((seat: any) => ({
+                id: seat.id, // This should be the UUID from the API
+                seatNumber: seat.seatNumber,
+                isAvailable: seat.isAvailable,
+                isSelected: false
+            }));
+        } else {
+            // Fallback to mock data if no real seat data
+            newSeats = [];
+            const rows = 11; // 44 seats = 11 rows × 4 seats
+            const seatsPerRow = 4;
+            const seatLetters = ['A', 'B', 'C', 'D'];
+            
+            for (let row = 1; row <= rows; row++) {
+                for (let seatIndex = 0; seatIndex < seatsPerRow; seatIndex++) {
+                    newSeats.push({
+                        id: `mock-seat-${row}${seatLetters[seatIndex]}`, // Mock UUID-like ID
+                        seatNumber: `${row}${seatLetters[seatIndex]}`,
+                        isAvailable: Math.random() > 0.3, // 70% available
+                        isSelected: false
+                    });
+                }
+            }
+        }
+        
+        setSeats(newSeats);
+    }, [tripData]);
 
     // Restore booking data if user came back from login
     useEffect(() => {
@@ -81,7 +206,6 @@ const BookModal: React.FC<BookModalProps> = ({
                 setNumberOfAdults(data.numberOfAdults || 1);
                 setNumberOfInfants(data.numberOfInfants || 0);
                 setSelectedSeats(data.selectedSeats || []);
-                setPaidAmount(data.paidAmount || 0);
                 if (data.passengers) {
                     setPassengers(data.passengers);
                 }
@@ -118,12 +242,10 @@ const BookModal: React.FC<BookModalProps> = ({
     const isFormValid = () => {
         if (!bookerName || !bookerEmail || !bookerPhone) return false;
         if (selectedSeats.length !== numberOfAdults) return false;
-        if (paidAmount <= 0) return false; // Add paid amount validation
         
-        // Check if all adult passengers have required info
+        // Check if all adult passengers have required info (files are optional)
         for (const passenger of passengers) {
             if (!passenger.name || !passenger.passportNumberOrIdNumber) return false;
-            if (passenger.files.length === 0) return false;
         }
         
         return true;
@@ -167,7 +289,7 @@ const BookModal: React.FC<BookModalProps> = ({
     };
 
     const handleBooking = async () => {
-        // Check if user is logged in (you'll need to implement this logic)
+        // Check if user is logged in
         const token = localStorage.getItem('authToken');
         const isLoggedIn = !!token;
         
@@ -183,7 +305,6 @@ const BookModal: React.FC<BookModalProps> = ({
                 passengers,
                 selectedSeats,
                 totalAmount,
-                paidAmount,
                 from,
                 to
             };
@@ -196,6 +317,9 @@ const BookModal: React.FC<BookModalProps> = ({
         setIsLoading(true);
         
         try {
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://gaber-airplans.onrender.com/api/v1';
+            
+            // Step 1: Create booking
             const bookingData = {
                 tripId: tripData?.id,
                 seatIds: selectedSeats,
@@ -203,12 +327,11 @@ const BookModal: React.FC<BookModalProps> = ({
                     type: p.type,
                     name: p.name,
                     passportNumberOrIdNumber: p.passportNumberOrIdNumber,
-                    files: p.files
+                    files: p.files || [] // Send empty array if no files
                 }))
             };
 
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://gaber-airplans.onrender.com/api/v1';
-            const response = await fetch(`${apiUrl}/bookings`, {
+            const bookingResponse = await fetch(`${apiUrl}/bookings`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -217,20 +340,58 @@ const BookModal: React.FC<BookModalProps> = ({
                 body: JSON.stringify(bookingData)
             });
 
-            if (!response.ok) {
-                throw new Error('Booking failed');
+            if (!bookingResponse.ok) {
+                throw new Error('Booking creation failed');
             }
 
-            const result = await response.json();
-            console.log('Booking successful:', result);
+            const bookingResult = await bookingResponse.json();
+            console.log('Booking created:', bookingResult);
+            
+            // Store booking ID for potential cancellation
+            setCurrentBookingId(bookingResult.id);
+            
+            // Step 2: Create payment intent
+            const paymentData = {
+                firstName: bookerName.split(' ')[0] || bookerName,
+                lastName: bookerName.split(' ').slice(1).join(' ') || bookerName,
+                email: bookerEmail,
+                phone: bookerPhone,
+                city: "Cairo", // You might want to make this dynamic
+                country: "EG"
+            };
+
+            const paymentResponse = await fetch(`${apiUrl}/bookings/${bookingResult.id}/payments/intent`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(paymentData)
+            });
+
+            if (!paymentResponse.ok) {
+                throw new Error('Payment intent creation failed');
+            }
+
+            const paymentResult = await paymentResponse.json();
+            console.log('Payment intent created:', paymentResult);
             
             // Clear pending booking data
             localStorage.removeItem('pendingBooking');
-            onClose();
-            // You might want to show a success message or redirect
+            
+            // Show payment iframe instead of redirecting
+            if (paymentResult.redirectUrl) {
+                setPaymentUrl(paymentResult.redirectUrl);
+                setShowPayment(true);
+            } else {
+                // If no payment URL, show success message
+                alert('Booking created successfully!');
+                onClose();
+            }
+            
         } catch (error) {
             console.error('Booking error:', error);
-            // Show error message to user
+            alert(error instanceof Error ? error.message : 'Booking failed. Please try again.');
         } finally {
             setIsLoading(false);
         }
@@ -244,16 +405,116 @@ const BookModal: React.FC<BookModalProps> = ({
                 <div className="p-6">
                     <div className="flex justify-between items-center mb-6">
                         <h2 className="text-2xl font-semibold">
-                            Book Trip: {from} → {to}
+                            {bookingConfirmed ? "Booking Confirmed!" : showPayment ? "Complete Payment" : `Book Trip: ${from} → ${to}`}
                         </h2>
-                        <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">
+                        <button onClick={handleModalClose} className="text-gray-500 hover:text-gray-700 text-2xl">
                             ×
                         </button>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        {/* Left Column - Seat Selection */}
+                    {/* Booking confirmation view */}
+                    {bookingConfirmed ? (
+                        <div className="text-center space-y-6">
+                            <div className="mx-auto w-20 h-20 bg-green-100 rounded-full flex items-center justify-center">
+                                <div className="text-3xl text-green-600">✓</div>
+                            </div>
+                            
+                            <div>
+                                <h3 className="text-2xl font-semibold text-green-600 mb-2">Payment Successful!</h3>
+                                <p className="text-gray-600">Your trip has been booked successfully.</p>
+                            </div>
+                            
+                            <div className="bg-gray-50 rounded-lg p-6 text-left max-w-md mx-auto">
+                                <h4 className="font-semibold mb-4">Booking Summary</h4>
+                                <div className="space-y-2 text-sm">
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-600">Route:</span>
+                                        <span className="font-medium">{bookingDetails?.from} → {bookingDetails?.to}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-600">Price:</span>
+                                        <span className="font-medium">{bookingDetails?.price}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-600">Seats:</span>
+                                        <span className="font-medium">{bookingDetails?.selectedSeats?.length} seat(s)</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-600">Passengers:</span>
+                                        <span className="font-medium">{bookingDetails?.passengers?.length} passenger(s)</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-600">Booked by:</span>
+                                        <span className="font-medium">{bookingDetails?.bookerName}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="space-y-3">
+                                <p className="text-sm text-gray-500">
+                                    A confirmation email has been sent to {bookingDetails?.bookerEmail}
+                                </p>
+                                <button
+                                    onClick={handleModalClose}
+                                    className="px-6 py-3 bg-[#179FDB] text-white rounded-lg hover:bg-[#0f7ac3] transition"
+                                >
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    ) : showPayment && paymentUrl ? (
                         <div className="space-y-4">
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                    <p className="text-blue-800 font-medium">
+                                        {isLoading ? 'Processing...' : 'Payment Processing'}
+                                    </p>
+                                </div>
+                                <p className="text-blue-600 text-sm mt-1">
+                                    {isLoading 
+                                        ? 'Please wait while we process your request...'
+                                        : 'Complete your payment below to confirm your booking'
+                                    }
+                                </p>
+                            </div>
+                            
+                            <div className="border rounded-lg overflow-hidden shadow-sm">
+                                <iframe 
+                                    src={paymentUrl}
+                                    width="100%"
+                                    height="650"
+                                    className="border-0"
+                                    title="Payment Gateway"
+                                    style={{ minHeight: '650px' }}
+                                />
+                            </div>
+                            
+                            <div className="flex justify-between items-center pt-4 border-t bg-gray-50 p-4 rounded-lg">
+                                <button
+                                    onClick={handleCancelBooking}
+                                    disabled={isLoading}
+                                    className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isLoading ? 'Cancelling...' : '← Back to Booking'}
+                                </button>
+                                <div className="text-center">
+                                    <div className="text-sm text-gray-500">Secure payment powered by</div>
+                                    <div className="text-sm font-semibold text-blue-600">Paymob</div>
+                                </div>
+                                <button
+                                    onClick={handlePaymentComplete}
+                                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+                                >
+                                    Payment Complete ✓
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        /* Original booking form */
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                            {/* Left Column - Seat Selection */}
+                            <div className="space-y-4">
                             <h3 className="text-lg font-semibold">Select Seats</h3>
                             <p className="text-sm text-gray-600">
                                 Select {numberOfAdults} seat{numberOfAdults > 1 ? 's' : ''} for adults
@@ -261,7 +522,7 @@ const BookModal: React.FC<BookModalProps> = ({
                             </p>
                             
                             <div className="grid grid-cols-4 gap-2 max-w-md">
-                                {seats.map(seat => (
+                                {seats.map((seat: any) => (
                                     <button
                                         key={seat.id}
                                         onClick={() => handleSeatClick(seat.id)}
@@ -378,7 +639,7 @@ const BookModal: React.FC<BookModalProps> = ({
                                             />
                                             <div>
                                                 <label className="block text-sm font-medium mb-1">
-                                                    {passenger.type === 'ADULT' ? 'Passport' : 'Birth Certificate'}
+                                                    {passenger.type === 'ADULT' ? 'Passport (Optional)' : 'Birth Certificate (Optional)'}
                                                 </label>
                                                 <input
                                                     type="file"
@@ -392,32 +653,10 @@ const BookModal: React.FC<BookModalProps> = ({
                                 ))}
                             </div>
 
-                            {/* Payment Summary */}
-                            <div className="space-y-3 p-4 bg-gray-50 rounded-lg">
-                                <h4 className="font-medium">Payment Summary</h4>
-                                <div className="grid grid-cols-1 gap-3">
-                                    <div className="flex justify-between">
-                                        <span>Total Amount:</span>
-                                        <span className="font-semibold">${totalAmount}</span>
-                                    </div>
-                                    <input
-                                        type="number"
-                                        placeholder="Paid Amount"
-                                        value={paidAmount}
-                                        onChange={(e) => setPaidAmount(Number(e.target.value))}
-                                        className="p-2 border rounded-lg"
-                                    />
-                                    <div className="flex justify-between">
-                                        <span>Remaining:</span>
-                                        <span className="font-semibold">${totalAmount - paidAmount}</span>
-                                    </div>
-                                </div>
-                            </div>
-
                             {/* Action Buttons */}
                             <div className="flex justify-end gap-3">
                                 <button
-                                    onClick={onClose}
+                                    onClick={handleModalClose}
                                     className="px-6 py-2 rounded-xl border border-gray-300 hover:bg-gray-100 transition"
                                 >
                                     Cancel
@@ -432,6 +671,7 @@ const BookModal: React.FC<BookModalProps> = ({
                             </div>
                         </div>
                     </div>
+                    )}
                 </div>
             </div>
         </div>
