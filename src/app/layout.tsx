@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Almarai } from "next/font/google";
+import { Toaster } from "react-hot-toast";
 import "./globals.css";
 
 // Almarai font for English
@@ -23,6 +24,34 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${almarai.variable} font-sans antialiased `}>
         {children}
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            duration: 5000,
+            style: {
+              background: "#363636",
+              color: "#fff",
+              borderRadius: "10px",
+              fontSize: "14px",
+              padding: "16px",
+            },
+            success: {
+              style: {
+                background: "#10B981",
+              },
+            },
+            error: {
+              style: {
+                background: "#EF4444",
+              },
+            },
+            loading: {
+              style: {
+                background: "#3B82F6",
+              },
+            },
+          }}
+        />
       </body>
     </html>
   );

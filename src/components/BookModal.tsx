@@ -1,6 +1,12 @@
 "use client";
 import { useRouter } from "next/navigation";
 import React, { useState, useEffect } from "react";
+import toast from "react-hot-toast";
+import {
+  generateInvoicePDF,
+  openInvoicePDF,
+  type BookingData,
+} from "@/utils/pdfGenerator";
 
 interface Passenger {
   type: "ADULT" | "INFANT";
@@ -52,6 +58,7 @@ const BookModal: React.FC<BookModalProps> = ({
   const [bookingConfirmed, setBookingConfirmed] = useState(false);
   const [bookingDetails, setBookingDetails] = useState<any>(null);
   const [currentBookingId, setCurrentBookingId] = useState<string | null>(null);
+  const [invoiceData, setInvoiceData] = useState<BookingData | null>(null);
 
   // Reset all states when modal is closed
   const resetModalStates = () => {
@@ -60,6 +67,7 @@ const BookModal: React.FC<BookModalProps> = ({
     setBookingConfirmed(false);
     setCurrentBookingId(null);
     setBookingDetails(null);
+    setInvoiceData(null);
     setPhoneError("");
   };
 
@@ -90,21 +98,106 @@ const BookModal: React.FC<BookModalProps> = ({
   };
 
   // Handle payment completion
-  const handlePaymentComplete = () => {
-    setShowPayment(false);
-    setPaymentUrl(null);
-    setCurrentBookingId(null); // Clear booking ID after successful payment
-    setBookingConfirmed(true);
-    // Store booking details for confirmation screen
-    setBookingDetails({
-      from,
-      to,
-      price,
-      selectedSeats,
-      passengers: passengers.filter((p) => p.name.trim() !== ""),
-      bookerName,
-      bookerEmail,
-    });
+  const handlePaymentComplete = async () => {
+    if (!currentBookingId) {
+      toast.error("No booking ID found");
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const token = localStorage.getItem("authToken");
+      const apiUrl =
+        process.env.NEXT_PUBLIC_API_URL ||
+        "https://gaber-airplans.onrender.com/api/v1";
+
+      // Check booking status
+      const response = await fetch(`${apiUrl}/bookings/${currentBookingId}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch booking status");
+      }
+
+      const bookingData = await response.json();
+      console.log("Booking status:", bookingData);
+
+      // Check if payment is completed (status not PENDING_PAYMENT)
+      const completedStatuses = ["CONFIRMED", "COMPLETED", "PAID", "SUCCESS"];
+      const isPaymentCompleted =
+        completedStatuses.includes(bookingData.status) ||
+        bookingData.status == "PENDING_PAYMENT";
+
+      if (isPaymentCompleted) {
+        // Payment is complete, generate PDF invoice
+        const invoiceData = {
+          bookingId: bookingData.id,
+          tripId: bookingData.tripId || tripData?.id,
+          from: from,
+          to: to,
+          departure: tripData?.departureTime || new Date().toISOString(),
+          flightNumber: tripData?.flightNumber || "N/A",
+          seats: selectedSeats,
+          passengers: passengers.filter((p) => p.name.trim() !== ""),
+          bookerName: bookerName,
+          bookerEmail: bookerEmail,
+          bookerPhone: bookerPhone,
+          totalAmount: totalAmount,
+          currency: tripData?.currency || "USD",
+          bookingDate: bookingData.createdAt || new Date().toISOString(),
+          paymentStatus: bookingData.status,
+        };
+
+        // Store invoice data for Print PDF button
+        setInvoiceData(invoiceData);
+
+        // Generate and open PDF invoice in new tab
+        generateInvoicePDF(invoiceData);
+
+        // Show success message
+        toast.success("Payment completed! Invoice generated successfully.", {
+          duration: 5000,
+        });
+
+        setShowPayment(false);
+        setPaymentUrl(null);
+        setCurrentBookingId(null);
+        setBookingConfirmed(true);
+
+        // Store booking details for confirmation screen
+        setBookingDetails({
+          from,
+          to,
+          price,
+          selectedSeats,
+          passengers: passengers.filter((p) => p.name.trim() !== ""),
+          bookerName,
+          bookerEmail,
+          bookingId: bookingData.id,
+          status: bookingData.status,
+        });
+      } else {
+        // Payment still pending
+        toast.error(
+          "Payment is still pending. Please complete the payment first.",
+          {
+            duration: 4000,
+          }
+        );
+      }
+    } catch (error) {
+      console.error("Error checking booking status:", error);
+      toast.error("Failed to verify payment status. Please try again.", {
+        duration: 4000,
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Handle booking cancellation when going back from payment
@@ -203,19 +296,43 @@ const BookModal: React.FC<BookModalProps> = ({
     if (isModalOpen) {
       const pendingBooking = localStorage.getItem("pendingBooking");
       if (pendingBooking) {
-        const data = JSON.parse(pendingBooking);
-        setBookerName(data.bookerName || "");
-        setBookerEmail(data.bookerEmail || "");
-        setBookerPhone(data.bookerPhone || "+20");
-        setNumberOfAdults(data.numberOfAdults || 1);
-        setNumberOfInfants(data.numberOfInfants || 0);
-        setSelectedSeats(data.selectedSeats || []);
-        if (data.passengers) {
-          setPassengers(data.passengers);
+        try {
+          const data = JSON.parse(pendingBooking);
+
+          // Only restore if this modal matches the pending booking trip
+          if (data.from === from && data.to === to) {
+            setBookerName(data.bookerName || "");
+            setBookerEmail(data.bookerEmail || "");
+            setBookerPhone(data.bookerPhone || "+20");
+            setNumberOfAdults(data.numberOfAdults || 1);
+            setNumberOfInfants(data.numberOfInfants || 0);
+            setSelectedSeats(data.selectedSeats || []);
+            if (data.passengers) {
+              setPassengers(data.passengers);
+            }
+
+            // Show specific restoration success message only if substantial data was restored
+            const restoredItems = [];
+            if (data.bookerName) restoredItems.push("contact info");
+            if (data.selectedSeats?.length > 0)
+              restoredItems.push(`${data.selectedSeats.length} selected seats`);
+            if (data.passengers?.length > 0)
+              restoredItems.push(`${data.passengers.length} passengers`);
+
+            // Only show toast if there's meaningful data to restore
+            if (restoredItems.length > 0) {
+              toast.success(`Booking restored: ${restoredItems.join(", ")}`, {
+                duration: 3000,
+              });
+            }
+          }
+        } catch (error) {
+          console.error("Error restoring booking data:", error);
+          localStorage.removeItem("pendingBooking");
         }
       }
     }
-  }, [isModalOpen]);
+  }, [isModalOpen, from, to]);
 
   // Phone validation function
   const validatePhone = (phone: string): boolean => {
@@ -347,8 +464,9 @@ const BookModal: React.FC<BookModalProps> = ({
     const isLoggedIn = !!token;
 
     if (!isLoggedIn) {
-      // Store booking data in localStorage for after login
+      // Store complete booking data and search parameters for after login
       const bookingData = {
+        // Trip and booking data
         tripData,
         bookerName,
         bookerEmail,
@@ -360,10 +478,55 @@ const BookModal: React.FC<BookModalProps> = ({
         totalAmount,
         from,
         to,
+        returnUrl: window.location.pathname,
+        shouldReopenModal: true,
+
+        // Store search parameters to recreate the search
+        searchParams: {
+          from,
+          to,
+          // We can derive approximate dates or store them if available
+          departure: tripData?.departureTime || new Date().toISOString(),
+        },
+
+        // Store the complete trip data so we don't lose it
+        originalTripData: tripData,
+
+        // Timestamp for data freshness
+        timestamp: Date.now(),
       };
       localStorage.setItem("pendingBooking", JSON.stringify(bookingData));
-      router.push("/signin");
-      onClose();
+
+      // Show toaster with countdown
+      let countdown = 3;
+      const toastId = toast.loading(
+        `Please log in to complete your booking. Redirecting to login page in ${countdown} seconds...`,
+        {
+          duration: 3000,
+        }
+      );
+
+      const countdownInterval = setInterval(() => {
+        countdown--;
+        if (countdown > 0) {
+          toast.loading(
+            `Please log in to complete your booking. Redirecting to login page in ${countdown} seconds...`,
+            {
+              id: toastId,
+            }
+          );
+        }
+      }, 1000);
+
+      // Redirect after countdown
+      setTimeout(() => {
+        clearInterval(countdownInterval);
+        toast.dismiss(toastId);
+        toast.success("Redirecting to login page...", { duration: 2000 });
+        router.push("/signin");
+        onClose();
+      }, 3000);
+
       return;
     }
 
@@ -443,15 +606,20 @@ const BookModal: React.FC<BookModalProps> = ({
         setShowPayment(true);
       } else {
         // If no payment URL, show success message
-        alert("Booking created successfully!");
+        toast.success("Booking created successfully!", {
+          duration: 4000,
+        });
         onClose();
       }
     } catch (error) {
       console.error("Booking error:", error);
-      alert(
+      toast.error(
         error instanceof Error
           ? error.message
-          : "Booking failed. Please try again."
+          : "Booking failed. Please try again.",
+        {
+          duration: 4000,
+        }
       );
     } finally {
       setIsLoading(false);
@@ -460,16 +628,19 @@ const BookModal: React.FC<BookModalProps> = ({
 
   if (!isModalOpen) return null;
 
+  // Don't show modal if no seats are available
+  if (availableSeats === 0) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-3xl w-full max-w-6xl max-h-[90vh] overflow-hidden shadow-2xl border border-gray-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-2 sm:p-4">
+      <div className="bg-white rounded-2xl sm:rounded-3xl w-full max-w-7xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden shadow-2xl border border-gray-100">
         <div className="relative">
           {/* Header */}
-          <div className="flex justify-between items-center p-8 pb-6 border-b border-gray-100">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+          <div className="flex justify-between items-center p-4 sm:p-6 lg:p-8 pb-4 sm:pb-6 border-b border-gray-100">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="w-8 h-8 sm:w-10 sm:h-10 bg-blue-100 rounded-full flex items-center justify-center">
                 <svg
-                  className="w-5 h-5 text-blue-600"
+                  className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -482,7 +653,7 @@ const BookModal: React.FC<BookModalProps> = ({
                   />
                 </svg>
               </div>
-              <h2 className="text-2xl font-bold text-gray-900">
+              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-900">
                 {bookingConfirmed
                   ? "Booking Confirmed!"
                   : showPayment
@@ -492,10 +663,10 @@ const BookModal: React.FC<BookModalProps> = ({
             </div>
             <button
               onClick={handleModalClose}
-              className="w-10 h-10 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center text-gray-500 hover:text-gray-700 transition-all duration-200"
+              className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 hover:bg-gray-200 rounded-full flex items-center justify-center text-gray-500 hover:text-gray-700 transition-all duration-200"
             >
               <svg
-                className="w-5 h-5"
+                className="w-4 h-4 sm:w-5 sm:h-5"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -511,13 +682,13 @@ const BookModal: React.FC<BookModalProps> = ({
           </div>
 
           {/* Content */}
-          <div className="overflow-y-auto max-h-[calc(90vh-120px)] p-8">
+          <div className="overflow-y-auto max-h-[calc(95vh-80px)] sm:max-h-[calc(90vh-120px)] p-4 sm:p-6 lg:p-8">
             {/* Booking confirmation view */}
             {bookingConfirmed ? (
-              <div className="text-center space-y-8 py-8">
-                <div className="mx-auto w-24 h-24 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center shadow-lg">
+              <div className="text-center space-y-6 sm:space-y-8 py-4 sm:py-8">
+                <div className="mx-auto w-20 h-20 sm:w-24 sm:h-24 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center shadow-lg">
                   <svg
-                    className="w-10 h-10 text-white"
+                    className="w-8 h-8 sm:w-10 sm:h-10 text-white"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -531,19 +702,19 @@ const BookModal: React.FC<BookModalProps> = ({
                   </svg>
                 </div>
 
-                <div className="space-y-3">
-                  <h3 className="text-3xl font-bold text-green-600">
+                <div className="space-y-2 sm:space-y-3">
+                  <h3 className="text-2xl sm:text-3xl font-bold text-green-600">
                     Payment Successful!
                   </h3>
-                  <p className="text-lg text-gray-600">
+                  <p className="text-base sm:text-lg text-gray-600 px-4">
                     Your trip has been booked successfully.
                   </p>
                 </div>
 
-                <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-2xl p-8 text-left max-w-md mx-auto border border-gray-200">
-                  <h4 className="text-xl font-bold mb-6 text-gray-900 flex items-center gap-2">
+                <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-2xl p-4 sm:p-6 lg:p-8 text-left max-w-full sm:max-w-md mx-auto border border-gray-200">
+                  <h4 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 text-gray-900 flex items-center gap-2">
                     <svg
-                      className="w-5 h-5 text-blue-600"
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -557,49 +728,65 @@ const BookModal: React.FC<BookModalProps> = ({
                     </svg>
                     Booking Summary
                   </h4>
-                  <div className="space-y-4">
+                  <div className="space-y-3 sm:space-y-4">
+                    {bookingDetails?.bookingId && (
+                      <div className="flex justify-between items-center py-2 border-b border-gray-200">
+                        <span className="text-gray-600 font-medium text-sm sm:text-base">
+                          Booking ID:
+                        </span>
+                        <span className="font-bold text-blue-600 text-sm sm:text-base text-right">
+                          {bookingDetails.bookingId.slice(-8).toUpperCase()}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between items-center py-2 border-b border-gray-200">
-                      <span className="text-gray-600 font-medium">Route:</span>
-                      <span className="font-bold text-gray-900">
+                      <span className="text-gray-600 font-medium text-sm sm:text-base">
+                        Route:
+                      </span>
+                      <span className="font-bold text-gray-900 text-sm sm:text-base text-right">
                         {bookingDetails?.from} → {bookingDetails?.to}
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-b border-gray-200">
-                      <span className="text-gray-600 font-medium">Price:</span>
-                      <span className="font-bold text-green-600">
+                      <span className="text-gray-600 font-medium text-sm sm:text-base">
+                        Price:
+                      </span>
+                      <span className="font-bold text-green-600 text-sm sm:text-base">
                         {bookingDetails?.price}
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-b border-gray-200">
-                      <span className="text-gray-600 font-medium">Seats:</span>
-                      <span className="font-bold text-gray-900">
+                      <span className="text-gray-600 font-medium text-sm sm:text-base">
+                        Seats:
+                      </span>
+                      <span className="font-bold text-gray-900 text-sm sm:text-base">
                         {bookingDetails?.selectedSeats?.length} seat(s)
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-b border-gray-200">
-                      <span className="text-gray-600 font-medium">
+                      <span className="text-gray-600 font-medium text-sm sm:text-base">
                         Passengers:
                       </span>
-                      <span className="font-bold text-gray-900">
+                      <span className="font-bold text-gray-900 text-sm sm:text-base">
                         {bookingDetails?.passengers?.length} passenger(s)
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-2">
-                      <span className="text-gray-600 font-medium">
+                      <span className="text-gray-600 font-medium text-sm sm:text-base">
                         Booked by:
                       </span>
-                      <span className="font-bold text-gray-900">
+                      <span className="font-bold text-gray-900 text-sm sm:text-base text-right">
                         {bookingDetails?.bookerName}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="space-y-4">
-                  <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
-                    <p className="text-blue-800 font-medium flex items-center gap-2">
+                <div className="space-y-3 sm:space-y-4">
+                  <div className="bg-blue-50 rounded-xl p-3 sm:p-4 border border-blue-200 mx-2 sm:mx-0">
+                    <p className="text-blue-800 font-medium flex items-center gap-2 text-sm sm:text-base">
                       <svg
-                        className="w-5 h-5"
+                        className="w-4 h-4 sm:w-5 sm:h-5 shrink-0"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -611,79 +798,160 @@ const BookModal: React.FC<BookModalProps> = ({
                           d="M3 8l7.89 7.89a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
                         />
                       </svg>
-                      Confirmation email sent to {bookingDetails?.bookerEmail}
+                      <span className="break-all">
+                        Confirmation email sent to {bookingDetails?.bookerEmail}
+                      </span>
                     </p>
                   </div>
-                  <button
-                    onClick={handleModalClose}
-                    className="px-8 py-4 bg-gradient-to-r from-[#179FDB] to-[#0f7ac3] text-white rounded-xl hover:from-[#0f7ac3] hover:to-[#0a5a8a] transition-all duration-300 font-semibold text-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1"
-                  >
-                    Close
-                  </button>
+
+                  {bookingDetails?.bookingId && (
+                    <div className="bg-green-50 rounded-xl p-3 sm:p-4 border border-green-200 mx-2 sm:mx-0">
+                      <p className="text-green-800 font-medium flex items-center gap-2 text-sm sm:text-base">
+                        <svg
+                          className="w-4 h-4 sm:w-5 sm:h-5 shrink-0"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                          />
+                        </svg>
+                        Invoice ready - use "Print PDF" button below
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full">
+                    {invoiceData && (
+                      <button
+                        onClick={() => {
+                          try {
+                            openInvoicePDF(invoiceData);
+                            toast.success("Opening PDF invoice in new tab...", {
+                              duration: 3000,
+                            });
+                          } catch (error) {
+                            toast.error(
+                              "Failed to open PDF. Please try again.",
+                              {
+                                duration: 4000,
+                              }
+                            );
+                          }
+                        }}
+                        className="w-full sm:w-auto px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl hover:from-green-600 hover:to-green-700 transition-all duration-300 font-semibold text-base sm:text-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center justify-center gap-2"
+                      >
+                        <svg
+                          className="w-5 h-5"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+                          />
+                        </svg>
+                        Print PDF
+                      </button>
+                    )}
+                    <button
+                      onClick={handleModalClose}
+                      className="w-full sm:w-auto px-6 py-3 sm:px-8 sm:py-4 bg-gradient-to-r from-[#179FDB] to-[#0f7ac3] text-white rounded-xl hover:from-[#0f7ac3] hover:to-[#0a5a8a] transition-all duration-300 font-semibold text-base sm:text-lg shadow-lg hover:shadow-xl transform hover:-translate-y-1"
+                    >
+                      Close
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : showPayment && paymentUrl ? (
-              <div className="space-y-6">
-                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse"></div>
-                    <h3 className="text-xl font-bold text-blue-900">
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-4 sm:p-6">
+                  <div className="flex items-center gap-2 sm:gap-3 mb-2 sm:mb-3">
+                    <div className="w-2 h-2 sm:w-3 sm:h-3 bg-blue-500 rounded-full animate-pulse"></div>
+                    <h3 className="text-lg sm:text-xl font-bold text-blue-900">
                       {isLoading
                         ? "Processing Payment..."
                         : "Complete Your Payment"}
                     </h3>
                   </div>
-                  <p className="text-blue-700 font-medium">
+                  <p className="text-blue-700 font-medium text-sm sm:text-base">
                     {isLoading
                       ? "Please wait while we process your request..."
                       : "Complete your payment below to confirm your booking"}
                   </p>
                 </div>
 
-                <div className="border-2 border-gray-200 rounded-2xl overflow-hidden shadow-lg bg-white">
+                <div className="border-2 border-gray-200 rounded-xl sm:rounded-2xl overflow-hidden shadow-lg bg-white">
                   <iframe
                     src={paymentUrl}
                     width="100%"
-                    height="650"
-                    className="border-0"
+                    height="500"
+                    className="border-0 sm:h-[650px]"
                     title="Payment Gateway"
-                    style={{ minHeight: "650px" }}
+                    style={{ minHeight: "500px" }}
                   />
                 </div>
 
-                <div className="flex justify-between items-center pt-6 border-t-2 border-gray-100 bg-gradient-to-r from-gray-50 to-gray-100 p-6 rounded-2xl">
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 sm:pt-6 border-t-2 border-gray-100 bg-gradient-to-r from-gray-50 to-gray-100 p-4 sm:p-6 rounded-2xl">
                   <button
                     onClick={handleCancelBooking}
                     disabled={isLoading}
-                    className="px-6 py-3 text-gray-700 bg-white border-2 border-gray-300 rounded-xl hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 font-semibold disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    className="w-full sm:w-auto px-4 py-2 sm:px-6 sm:py-3 text-gray-700 bg-white border-2 border-gray-300 rounded-xl hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 font-semibold disabled:opacity-50 disabled:cursor-not-allowed shadow-sm text-sm sm:text-base"
                   >
                     {isLoading ? "Cancelling..." : "← Back to Booking"}
                   </button>
-                  <div className="text-center">
-                    <div className="text-sm text-gray-600 font-medium">
+                  <div className="text-center order-first sm:order-0">
+                    <div className="text-xs sm:text-sm text-gray-600 font-medium">
                       Secure payment powered by
                     </div>
-                    <div className="text-lg font-bold text-blue-600">
+                    <div className="text-base sm:text-lg font-bold text-blue-600">
                       Paymob
                     </div>
                   </div>
                   <button
                     onClick={handlePaymentComplete}
-                    className="px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl hover:from-green-600 hover:to-green-700 transition-all duration-200 font-semibold shadow-lg hover:shadow-xl transform hover:-translate-y-1"
+                    disabled={isLoading}
+                    className="w-full sm:w-auto px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl hover:from-green-600 hover:to-green-700 transition-all duration-200 font-semibold shadow-lg hover:shadow-xl transform hover:-translate-y-1 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                   >
-                    Payment Complete ✓
+                    {isLoading ? (
+                      <div className="flex items-center gap-2 justify-center">
+                        <svg
+                          className="animate-spin w-4 h-4 sm:w-5 sm:h-5"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                          />
+                        </svg>
+                        Verifying...
+                      </div>
+                    ) : (
+                      "Payment Complete ✓"
+                    )}
                   </button>
                 </div>
               </div>
             ) : (
-              /* Modern booking form */
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+              /* Modern responsive booking form */
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 lg:gap-10">
                 {/* Left Column - Seat Selection */}
-                <div className="space-y-6">
-                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-200">
-                    <h3 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+                <div className="space-y-4 sm:space-y-6">
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl sm:rounded-2xl p-4 sm:p-6 border border-blue-200">
+                    <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
                       <svg
-                        className="w-6 h-6 text-blue-600"
+                        className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -703,7 +971,7 @@ const BookModal: React.FC<BookModalProps> = ({
                       </svg>
                       Select Seats
                     </h3>
-                    <p className="text-blue-700 font-medium">
+                    <p className="text-blue-700 font-medium text-sm sm:text-base">
                       Select {numberOfAdults} seat
                       {numberOfAdults > 1 ? "s" : ""} for adults
                       {numberOfInfants > 0 &&
@@ -713,15 +981,15 @@ const BookModal: React.FC<BookModalProps> = ({
                     </p>
                   </div>
 
-                  <div className="bg-white rounded-2xl p-6 border-2 border-gray-100 shadow-sm">
-                    <div className="grid grid-cols-4 gap-3 max-w-md mx-auto">
+                  <div className="bg-white rounded-xl sm:rounded-2xl p-4 sm:p-6 border-2 border-gray-100 shadow-sm">
+                    <div className="grid grid-cols-4 gap-2 sm:gap-3 max-w-sm sm:max-w-md mx-auto">
                       {seats.map((seat: any) => (
                         <button
                           key={seat.id}
                           onClick={() => handleSeatClick(seat.id)}
                           disabled={!seat.isAvailable}
                           className={`
-                            p-3 rounded-xl text-sm font-bold border-2 transition-all duration-200 transform hover:scale-105
+                            p-2 sm:p-3 rounded-lg sm:rounded-xl text-xs sm:text-sm font-bold border-2 transition-all duration-200 transform hover:scale-105
                             ${
                               !seat.isAvailable
                                 ? "bg-gray-200 text-gray-500 cursor-not-allowed border-gray-300"
@@ -736,21 +1004,21 @@ const BookModal: React.FC<BookModalProps> = ({
                       ))}
                     </div>
 
-                    <div className="flex justify-center gap-6 mt-6 text-sm">
-                      <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 bg-white border-2 border-gray-300 rounded-lg"></div>
+                    <div className="flex flex-col sm:flex-row justify-center gap-3 sm:gap-6 mt-4 sm:mt-6 text-xs sm:text-sm">
+                      <div className="flex items-center gap-2 justify-center">
+                        <div className="w-4 h-4 sm:w-5 sm:h-5 bg-white border-2 border-gray-300 rounded-lg"></div>
                         <span className="font-medium text-gray-600">
                           Available
                         </span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 bg-gradient-to-br from-[#179FDB] to-[#0f7ac3] border-2 border-[#179FDB] rounded-lg"></div>
+                      <div className="flex items-center gap-2 justify-center">
+                        <div className="w-4 h-4 sm:w-5 sm:h-5 bg-gradient-to-br from-[#179FDB] to-[#0f7ac3] border-2 border-[#179FDB] rounded-lg"></div>
                         <span className="font-medium text-gray-600">
                           Selected
                         </span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 bg-gray-200 border-2 border-gray-300 rounded-lg"></div>
+                      <div className="flex items-center gap-2 justify-center">
+                        <div className="w-4 h-4 sm:w-5 sm:h-5 bg-gray-200 border-2 border-gray-300 rounded-lg"></div>
                         <span className="font-medium text-gray-600">
                           Occupied
                         </span>
@@ -760,7 +1028,7 @@ const BookModal: React.FC<BookModalProps> = ({
                 </div>
 
                 {/* Right Column - Passenger Information */}
-                <div className="space-y-6">
+                <div className="space-y-4 sm:space-y-6">
                   <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-6 border border-green-200">
                     <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                       <svg
@@ -986,22 +1254,22 @@ const BookModal: React.FC<BookModalProps> = ({
                   )}
 
                   {/* Action Buttons */}
-                  <div className="flex justify-end gap-4 pt-6">
+                  <div className="flex flex-col sm:flex-row justify-end gap-3 sm:gap-4 pt-4 sm:pt-6">
                     <button
                       onClick={handleModalClose}
-                      className="px-8 py-4 rounded-xl border-2 border-gray-300 bg-white hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 font-bold text-gray-700 shadow-sm"
+                      className="w-full sm:w-auto px-6 py-3 sm:px-8 sm:py-4 rounded-xl border-2 border-gray-300 bg-white hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 font-bold text-gray-700 shadow-sm text-sm sm:text-base"
                     >
                       Cancel
                     </button>
                     <button
                       onClick={handleBooking}
                       disabled={isLoading || !isFormValid()}
-                      className="px-8 py-4 rounded-xl bg-gradient-to-r from-[#179FDB] to-[#0f7ac3] text-white hover:from-[#0f7ac3] hover:to-[#0a5a8a] transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed font-bold shadow-lg hover:shadow-xl transform hover:-translate-y-1 disabled:transform-none"
+                      className="w-full sm:w-auto px-6 py-3 sm:px-8 sm:py-4 rounded-xl bg-gradient-to-r from-[#179FDB] to-[#0f7ac3] text-white hover:from-[#0f7ac3] hover:to-[#0a5a8a] transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed font-bold shadow-lg hover:shadow-xl transform hover:-translate-y-1 disabled:transform-none text-sm sm:text-base"
                     >
                       {isLoading ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 justify-center">
                           <svg
-                            className="animate-spin w-5 h-5"
+                            className="animate-spin w-4 h-4 sm:w-5 sm:h-5"
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
