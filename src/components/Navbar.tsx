@@ -43,28 +43,28 @@ const Navbar = () => {
       {isOpen && (
         <div className="absolute top-full left-0 w-full bg-white shadow-lg flex flex-col items-center py-4 md:hidden gap-4 rounded-2xl my-2">
           <Link
-            href="#"
+            href="https://stanlyegypt.com/?v=890e1209a1dd"
             className="font-semibold text-black"
             onClick={() => setIsOpen(false)}
           >
             Home
           </Link>
           <Link
-            href="#"
+            href="https://stanlyegypt.com/about/?v=890e1209a1dd"
             className="font-semibold text-black"
             onClick={() => setIsOpen(false)}
           >
             About
           </Link>
           <Link
-            href="#"
+            href="https://stanlyegypt.com/trips/?v=890e1209a1dd"
             className="font-semibold text-black"
             onClick={() => setIsOpen(false)}
           >
             Trips
           </Link>
           <Link
-            href="#"
+            href="https://stanlyegypt.com/contact-us/?v=890e1209a1dd"
             className="font-semibold text-black"
             onClick={() => setIsOpen(false)}
           >
