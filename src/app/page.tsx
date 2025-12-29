@@ -143,26 +143,37 @@ export default function Home() {
     () => new Set(availableDates),
     [availableDates]
   );
-  const yearStartDate = useMemo(
-    () => new Date(calendarYear, 0, 1),
-    [calendarYear]
-  );
-  const yearEndDate = useMemo(
-    () => new Date(calendarYear, 11, 31),
-    [calendarYear]
-  );
   const today = useMemo(() => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     return now;
   }, []);
+  const yearStartDate = useMemo(
+    () => {
+      const d = new Date(today);
+      return d;
+    },
+    [today]
+  );
+  const yearEndDate = useMemo(
+    () => {
+      const d = new Date(today);
+      d.setFullYear(d.getFullYear() + 1);
+      return d;
+    },
+    [today]
+  );
   const disabledDays = useMemo(
     () => [
       { before: today },
-      { before: yearStartDate, after: yearEndDate },
-      (date: Date) => !availableDateSet.has(dateToISO(date)),
+      { after: yearEndDate },
+      (date: Date) => {
+        const isoDate = dateToISO(date);
+        // Disable if date is not in the available dates set
+        return !availableDateSet.has(isoDate);
+      },
     ],
-    [availableDateSet, today, yearStartDate, yearEndDate]
+    [availableDateSet, today, yearEndDate]
   );
 
   const tripsForSelectedDate = useMemo(() => {
@@ -170,13 +181,31 @@ export default function Home() {
     return searchResults.filter((t) => t.departure === selectedDate);
   }, [searchResults, selectedDate]);
 
-  const getYearBoundaries = (year: number) => {
-    const startUtc = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
-    const endUtc = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
-    return { startUtc, endUtc };
+  const getYearBoundaries = (date: Date) => {
+    // Use local date boundaries to avoid timezone issues
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setFullYear(end.getFullYear() + 1);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
   };
 
-  const dateToISO = (date: Date) => {
+  const dateToISO = (date: Date | string) => {
+    // Handle both Date objects and ISO strings
+    if (typeof date === 'string') {
+      // If it's already an ISO string (YYYY-MM-DD), return it as-is
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return date;
+      }
+      // Otherwise parse it
+      const d = new Date(date);
+      const year = d.getFullYear();
+      const month = `${d.getMonth() + 1}`.padStart(2, "0");
+      const day = `${d.getDate()}`.padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
+    // For Date objects, use local date components to avoid timezone issues
     const year = date.getFullYear();
     const month = `${date.getMonth() + 1}`.padStart(2, "0");
     const day = `${date.getDate()}`.padStart(2, "0");
@@ -225,10 +254,10 @@ export default function Home() {
         const apiUrl =
           process.env.NEXT_PUBLIC_API_URL ||
           "https://api.stanlyegypt.com/api/v1";
-        const { startUtc, endUtc } = getYearBoundaries(calendarYear);
+        const { start, end } = getYearBoundaries(today);
         const params = new URLSearchParams({
-          from: dateToISO(startUtc),
-          to: dateToISO(endUtc),
+          from: dateToISO(start),
+          to: dateToISO(end),
         });
 
         const response = await fetch(
@@ -243,6 +272,7 @@ export default function Home() {
           ? data
               .map((entry: any) => entry?.departureDate)
               .filter((d: string | undefined): d is string => Boolean(d))
+              .map((d: string) => dateToISO(d)) // Normalize dates to YYYY-MM-DD format
               .sort(
                 (a: string, b: string) =>
                   new Date(a).getTime() - new Date(b).getTime()
